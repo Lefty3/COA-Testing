@@ -108,13 +108,35 @@ On first launch the bot creates the `All Tests` and `Dashboard` tabs and install
 | `IGNORE_CHANNEL_PATTERNS` | _(empty)_ | Comma-separated substrings; channels matching are skipped (e.g. `guidelines,freely-shared`) |
 | `ANTHROPIC_API_KEY` | — | Anthropic API key |
 | `CLAUDE_MODEL` | `claude-sonnet-4-5` | Model for PDF extraction |
-| `GOOGLE_SERVICE_ACCOUNT_FILE` | `./service-account.json` | Path to the downloaded JSON key |
+| `GOOGLE_SERVICE_ACCOUNT_FILE` | _(empty)_ | Path to JSON key file (local dev) — use one of this OR the next var |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | _(empty)_ | Raw JSON contents of the key (Railway / Fly / Docker) |
 | `SPREADSHEET_ID` | — | Google Sheets ID |
 | `MASTER_TAB` | `All Tests` | Master tab name |
 | `DASHBOARD_TAB` | `Dashboard` | KPI tab name |
 | `SWEEP_DAY` | 0 (Mon) | Weekly sweep day-of-week (UTC) |
 | `SWEEP_HOUR` | 13 | Weekly sweep hour (UTC) |
 | `STATE_PATH` | `state.json` | Local dedupe state file |
+
+## Deploying on Railway
+
+1. **Push the repo to GitHub.** Make sure `.env` and `service-account.json` are NOT committed — they're already in `.gitignore`.
+2. **Create a Railway project** → New → Deploy from GitHub repo → pick this repo. Railway autodetects the Python project and runs `python bot.py`.
+3. **Add environment variables** under the service's *Variables* tab. Paste each of these — Railway lets you bulk-paste KEY=VALUE pairs:
+   - `DISCORD_TOKEN`
+   - `TEST_RESULTS_CATEGORY_ID`
+   - `ANTHROPIC_API_KEY`
+   - `SPREADSHEET_ID`
+   - `GOOGLE_SERVICE_ACCOUNT_JSON` — open `service-account.json`, copy the **entire file contents** (the `{ ... }` JSON object), and paste it as the value. Do NOT base64-encode it; Railway accepts multi-line JSON values as-is.
+   - Optionally: `IGNORE_CHANNEL_PATTERNS`, `CLAUDE_MODEL`, `MASTER_TAB`, `DASHBOARD_TAB`, `SWEEP_DAY`, `SWEEP_HOUR`.
+4. **Redeploy** (Railway auto-redeploys on variable change). Check the *Deploy Logs* tab — you should see `Logged in as YourBotName`. The crash `RuntimeError: Missing required env vars` means a required variable above is unset or misspelled.
+5. **Persistent state (optional).** The bot writes `state.json` to dedupe processed attachments. Railway's filesystem is ephemeral, so each redeploy resets it. That's fine because the bot also cross-checks against the sheet's `source_link` column — duplicates won't be created. If you want true persistence, attach a Railway **Volume** mounted at `/data` and set `STATE_PATH=/data/state.json`.
+
+### Troubleshooting
+
+- `RuntimeError: Missing required env vars: ...` — exactly one or more of the listed vars is unset in Railway. The error message names them.
+- `gspread.exceptions.APIError ... permission` — the spreadsheet hasn't been shared with the service-account email as Editor.
+- `discord.errors.PrivilegedIntentsRequired` — turn on *Message Content Intent* in the Discord developer portal.
+- Bot logs in but never captures anything — verify `TEST_RESULTS_CATEGORY_ID` is the **category** ID (right-click the category header), not a channel ID.
 
 ## Slash commands
 

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
-from typing import List, Sequence
+from typing import List, Optional, Sequence
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -26,9 +27,24 @@ _SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 
 class SheetsClient:
-    def __init__(self, *, service_account_file: str, spreadsheet_id: str,
-                 master_tab: str, dashboard_tab: str):
-        creds = Credentials.from_service_account_file(service_account_file, scopes=_SCOPES)
+    def __init__(
+        self,
+        *,
+        spreadsheet_id: str,
+        master_tab: str,
+        dashboard_tab: str,
+        service_account_file: Optional[str] = None,
+        service_account_json: Optional[str] = None,
+    ):
+        if service_account_json:
+            info = json.loads(service_account_json)
+            creds = Credentials.from_service_account_info(info, scopes=_SCOPES)
+        elif service_account_file:
+            creds = Credentials.from_service_account_file(service_account_file, scopes=_SCOPES)
+        else:
+            raise RuntimeError(
+                "SheetsClient needs either service_account_json or service_account_file."
+            )
         self._gc = gspread.authorize(creds)
         self._sh = self._gc.open_by_key(spreadsheet_id)
         self._master_name = master_tab

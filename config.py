@@ -22,7 +22,9 @@ class Config:
     ignore_channel_patterns: List[str]
     anthropic_api_key: str
     claude_model: str
-    google_service_account_file: str
+    # Exactly one of these will be populated:
+    google_service_account_file: str  # path on disk (local dev)
+    google_service_account_json: str  # raw JSON contents (Railway / Fly / Docker secrets)
     spreadsheet_id: str
     master_tab: str
     dashboard_tab: str
@@ -36,10 +38,15 @@ class Config:
             "DISCORD_TOKEN",
             "TEST_RESULTS_CATEGORY_ID",
             "ANTHROPIC_API_KEY",
-            "GOOGLE_SERVICE_ACCOUNT_FILE",
             "SPREADSHEET_ID",
         )
         missing = [k for k in required if not os.getenv(k)]
+
+        sa_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "")
+        sa_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+        if not sa_file and not sa_json:
+            missing.append("GOOGLE_SERVICE_ACCOUNT_FILE or GOOGLE_SERVICE_ACCOUNT_JSON")
+
         if missing:
             raise RuntimeError("Missing required env vars: " + ", ".join(missing))
 
@@ -49,7 +56,8 @@ class Config:
             ignore_channel_patterns=_csv(os.getenv("IGNORE_CHANNEL_PATTERNS", "")),
             anthropic_api_key=os.environ["ANTHROPIC_API_KEY"],
             claude_model=os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5"),
-            google_service_account_file=os.environ["GOOGLE_SERVICE_ACCOUNT_FILE"],
+            google_service_account_file=sa_file,
+            google_service_account_json=sa_json,
             spreadsheet_id=os.environ["SPREADSHEET_ID"],
             master_tab=os.getenv("MASTER_TAB", "All Tests"),
             dashboard_tab=os.getenv("DASHBOARD_TAB", "Dashboard"),

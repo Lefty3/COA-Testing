@@ -84,7 +84,8 @@ class TestResultsBot(discord.Client):
         self.tree = app_commands.CommandTree(self)
         self.extractor = PDFExtractor(api_key=config.anthropic_api_key, model=config.claude_model)
         self.sheets = SheetsClient(
-            service_account_file=config.google_service_account_file,
+            service_account_file=config.google_service_account_file or None,
+            service_account_json=config.google_service_account_json or None,
             spreadsheet_id=config.spreadsheet_id,
             master_tab=config.master_tab,
             dashboard_tab=config.dashboard_tab,
