@@ -86,6 +86,7 @@ class TestResultsBot(discord.Client):
         self.sheets = SheetsClient(
             service_account_file=config.google_service_account_file or None,
             service_account_json=config.google_service_account_json or None,
+            service_account_json_b64=config.google_service_account_json_b64 or None,
             spreadsheet_id=config.spreadsheet_id,
             master_tab=config.master_tab,
             dashboard_tab=config.dashboard_tab,
