@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from typing import List, Optional, Sequence
@@ -35,15 +36,21 @@ class SheetsClient:
         dashboard_tab: str,
         service_account_file: Optional[str] = None,
         service_account_json: Optional[str] = None,
+        service_account_json_b64: Optional[str] = None,
     ):
-        if service_account_json:
+        if service_account_json_b64:
+            # Decode base64 first — bulletproof against env-var \n mangling.
+            raw = base64.b64decode(service_account_json_b64.strip()).decode("utf-8")
+            info = json.loads(raw)
+            creds = Credentials.from_service_account_info(info, scopes=_SCOPES)
+        elif service_account_json:
             info = json.loads(service_account_json)
             creds = Credentials.from_service_account_info(info, scopes=_SCOPES)
         elif service_account_file:
             creds = Credentials.from_service_account_file(service_account_file, scopes=_SCOPES)
         else:
             raise RuntimeError(
-                "SheetsClient needs either service_account_json or service_account_file."
+                "SheetsClient needs service_account_json_b64, service_account_json, or service_account_file."
             )
         self._gc = gspread.authorize(creds)
         self._sh = self._gc.open_by_key(spreadsheet_id)
