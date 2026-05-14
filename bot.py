@@ -148,6 +148,79 @@ class TestResultsBot(discord.Client):
             )
 
         @self.tree.command(
+            name="diagnose",
+            description="Show what the bot can see — channels in the category, PDF counts, permissions.",
+        )
+        @app_commands.default_permissions(manage_guild=True)
+        async def diagnose(interaction: discord.Interaction):
+            await interaction.response.defer(thinking=True, ephemeral=True)
+            lines: list[str] = []
+            lines.append(f"**Configured category ID:** `{self.config.test_results_category_id}`")
+            lines.append(f"**Ignore patterns:** `{self.config.ignore_channel_patterns or '(none)'}`")
+            lines.append("")
+
+            # Walk every guild the bot is in and look up the category.
+            found_any_category = False
+            for guild in self.guilds:
+                lines.append(f"**Guild:** {guild.name} ({guild.id})")
+                cat = discord.utils.get(guild.categories, id=self.config.test_results_category_id)
+                if not cat:
+                    # Maybe the ID is a channel, not a category?
+                    maybe_channel = guild.get_channel(self.config.test_results_category_id)
+                    if maybe_channel is not None:
+                        lines.append(
+                            f"  ⚠️ ID `{self.config.test_results_category_id}` matches a **channel**, not a category: "
+                            f"#{getattr(maybe_channel, 'name', '?')} (type={type(maybe_channel).__name__}). "
+                            f"You need the category's ID, not the channel's."
+                        )
+                    else:
+                        lines.append(
+                            f"  ❌ No category or channel with ID `{self.config.test_results_category_id}` in this guild."
+                        )
+                    # List the category IDs we DO see, to help them find the right one.
+                    if guild.categories:
+                        lines.append("  Categories in this guild:")
+                        for c in guild.categories[:15]:
+                            lines.append(f"    • `{c.id}` — {c.name}")
+                    continue
+
+                found_any_category = True
+                lines.append(f"  ✅ Found category: **{cat.name}** with {len(cat.channels)} channel(s)")
+                total_pdfs = 0
+                for ch in cat.channels:
+                    if not isinstance(ch, discord.TextChannel):
+                        lines.append(f"  • #{ch.name} — skipped (not a text channel)")
+                        continue
+                    ignored = any(p.lower() in ch.name.lower() for p in self.config.ignore_channel_patterns)
+                    perms = ch.permissions_for(guild.me)
+                    can_read = perms.view_channel and perms.read_message_history
+                    pdf_count = 0
+                    if can_read and not ignored:
+                        try:
+                            async for msg in ch.history(limit=200):
+                                if not msg.attachments:
+                                    continue
+                                pdf_count += sum(1 for a in msg.attachments if a.filename.lower().endswith(".pdf"))
+                        except discord.Forbidden:
+                            can_read = False
+                    total_pdfs += pdf_count
+                    flags = []
+                    if ignored: flags.append("IGNORED")
+                    if not can_read: flags.append("NO READ PERM")
+                    flag_str = f" — {', '.join(flags)}" if flags else ""
+                    lines.append(f"  • #{ch.name} → {pdf_count} PDF(s){flag_str}")
+                lines.append(f"  **Total PDFs visible in category: {total_pdfs}**")
+
+            if not self.guilds:
+                lines.append("⚠️ The bot isn't in any guild. Re-invite using the OAuth URL.")
+
+            msg = "\n".join(lines)
+            # Discord caps interaction responses at 2000 chars — chunk if needed.
+            if len(msg) > 1900:
+                msg = msg[:1900] + "\n…(truncated)"
+            await interaction.followup.send(msg, ephemeral=True)
+
+        @self.tree.command(
             name="test_query",
             description="Summarise all stored test results for a compound (or channel).",
         )
