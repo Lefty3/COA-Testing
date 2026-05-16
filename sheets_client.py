@@ -15,19 +15,15 @@ from pdf_extractor import TEST_RESULT_FIELDS
 log = logging.getLogger(__name__)
 
 
-# Order matters — columns A..S below correspond to these headers in this exact order.
+# Order matters — columns A..R below correspond to these headers in this exact order.
 # IMPORTANT: dashboard formulas reference letter positions of E (compound),
 # I (test_date), J (lab), L (purity_pct), Q (result). Don't reorder those columns.
-MASTER_HEADERS = (
-    [
-        "source_channel",   # A
-        "source_link",      # B
-        "file_name",        # C
-        "captured_at",      # D  (ISO timestamp when the bot processed it)
-    ]
-    + TEST_RESULT_FIELDS   # E..R
-    + ["preview"]          # S  — =IMAGE(...) formula showing the PDF thumbnail
-)
+MASTER_HEADERS = [
+    "source_channel",   # A
+    "source_link",      # B
+    "file_name",        # C
+    "captured_at",      # D  (ISO timestamp when the bot processed it)
+] + TEST_RESULT_FIELDS  # E..R
 
 
 _SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -77,8 +73,7 @@ class SheetsClient:
         existing = ws.row_values(1)
         if existing != MASTER_HEADERS:
             ws.update("A1", [MASTER_HEADERS])
-            # Bold the header row; A:S covers up to the preview column.
-            ws.format("A1:S1", {"textFormat": {"bold": True}})
+            ws.format("A1:R1", {"textFormat": {"bold": True}})
         return ws
 
     def _ensure_dashboard_tab(self) -> gspread.Worksheet:
