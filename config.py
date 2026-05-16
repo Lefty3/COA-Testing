@@ -29,6 +29,7 @@ class Config:
     spreadsheet_id: str
     master_tab: str
     dashboard_tab: str
+    google_drive_folder_id: str   # if set, PDFs are uploaded to this Drive folder & link stored in sheet
     sweep_day: int
     sweep_hour: int
     state_path: str
@@ -64,6 +65,7 @@ class Config:
             spreadsheet_id=os.environ["SPREADSHEET_ID"],
             master_tab=os.getenv("MASTER_TAB", "All Tests"),
             dashboard_tab=os.getenv("DASHBOARD_TAB", "Dashboard"),
+            google_drive_folder_id=os.getenv("GOOGLE_DRIVE_FOLDER_ID", ""),
             sweep_day=int(os.getenv("SWEEP_DAY", "0")),
             sweep_hour=int(os.getenv("SWEEP_HOUR", "13")),
             state_path=os.getenv("STATE_PATH", "state.json"),

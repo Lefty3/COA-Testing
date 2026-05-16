@@ -14,6 +14,7 @@ from discord import app_commands
 from discord.ext import tasks
 
 from config import Config
+from drive_client import DriveClient
 from pdf_extractor import (
     PDFExtractor,
     TestResult,
@@ -91,6 +92,22 @@ class TestResultsBot(discord.Client):
             master_tab=config.master_tab,
             dashboard_tab=config.dashboard_tab,
         )
+        # Optional Drive uploader — only if a folder ID is configured.
+        self.drive: Optional[DriveClient] = None
+        if config.google_drive_folder_id:
+            try:
+                self.drive = DriveClient(
+                    folder_id=config.google_drive_folder_id,
+                    service_account_file=config.google_service_account_file or None,
+                    service_account_json=config.google_service_account_json or None,
+                    service_account_json_b64=config.google_service_account_json_b64 or None,
+                )
+                log.info("Drive uploads enabled — folder %s", config.google_drive_folder_id)
+            except Exception as e:
+                log.warning("Drive client failed to initialise (%s) — falling back to Discord jump URLs", e)
+                self.drive = None
+        else:
+            log.info("Drive uploads disabled (no GOOGLE_DRIVE_FOLDER_ID set) — using Discord jump URLs")
         self.state = State(Path(config.state_path))
         self._register_commands()
 
@@ -286,7 +303,7 @@ class TestResultsBot(discord.Client):
         channel = message.channel
         channel_name = getattr(channel, "name", "")
         hint = parse_channel_name(channel_name)
-        existing_links = None  # lazy-fetch once if needed
+        existing_files = None  # lazy-fetch once if needed
 
         for att in message.attachments:
             if not att.filename.lower().endswith(".pdf"):
@@ -295,10 +312,11 @@ class TestResultsBot(discord.Client):
                 continue
 
             # Cross-check against the sheet (covers reinstalls where state.json was lost).
-            # Check both the CDN URL (old rows) and jump URL (new rows) to avoid duplicates.
-            if existing_links is None:
-                existing_links = self.sheets.existing_links()
-            if att.url in existing_links or message.jump_url in existing_links:
+            # Dedup by (channel, filename) so it works regardless of link format
+            # (CDN URL, jump URL, or Drive URL).
+            if existing_files is None:
+                existing_files = self.sheets.existing_files()
+            if (channel_name, att.filename) in existing_files:
                 self.state.mark(att.id)
                 continue
 
@@ -310,10 +328,26 @@ class TestResultsBot(discord.Client):
                     hint=f"channel '{channel_name}', file '{att.filename}'",
                 )
                 merged = merge_with_channel(extracted, hint)
+
+                # Upload PDF to Drive if enabled; fall back to Discord jump URL.
+                # Drive link works for anyone (no Discord/Google login needed) and never expires.
+                stored_link = message.jump_url
+                if self.drive is not None:
+                    try:
+                        # Prefix the filename with channel + lot for easier browsing in Drive.
+                        drive_name = _drive_filename(channel_name, att.filename, merged)
+                        stored_link = await asyncio.to_thread(
+                            self.drive.upload_pdf,
+                            file_bytes=pdf_bytes,
+                            file_name=drive_name,
+                        )
+                    except Exception as e:
+                        log.warning("Drive upload failed for %s — using jump URL: %s", att.filename, e)
+
                 result = TestResult(
                     fields=merged,
                     source_channel=channel_name,
-                    source_link=message.jump_url,  # permanent link, never expires
+                    source_link=stored_link,
                     file_name=att.filename,
                 )
                 row = _build_row(result, message.jump_url)
@@ -426,6 +460,19 @@ def _build_summary_embed(query: str, rows: list[dict]) -> discord.Embed:
         embed.add_field(name=f"Recent tests ({len(recent)} of {len(rows)})", value="\n".join(recent_lines), inline=False)
 
     return embed
+
+
+def _drive_filename(channel_name: str, file_name: str, fields: dict) -> str:
+    """Build a human-friendly filename for the Drive copy.
+
+    Format: '<channel> — <lot or original> .pdf' if a lot exists, else just the original.
+    Keeps the channel as a prefix so Drive's filename sort groups by compound.
+    """
+    base = file_name.rsplit(".", 1)[0]
+    lot = (fields.get("batch_lot") or "").strip()
+    parts = [p for p in [channel_name, lot, base] if p]
+    # Drive filename length cap is generous (~32k) but keep it readable.
+    return " — ".join(parts)[:200] + ".pdf"
 
 
 def _build_row(result: TestResult, jump_url: str) -> list[str]:

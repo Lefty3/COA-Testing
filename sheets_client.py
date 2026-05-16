@@ -136,6 +136,18 @@ class SheetsClient:
         values = self._master.col_values(2)  # column B
         return set(v for v in values[1:] if v)
 
+    def existing_files(self) -> set[tuple[str, str]]:
+        """Return {(source_channel, file_name)} for every row already in the sheet.
+
+        This is link-format-agnostic — survives swapping source_link between
+        Discord CDN URLs, jump URLs, and Drive URLs without producing duplicates.
+        """
+        values = self._master.get_all_values()
+        if not values or len(values) < 2:
+            return set()
+        # Headers are MASTER_HEADERS — source_channel=col A (idx 0), file_name=col C (idx 2).
+        return {(r[0], r[2]) for r in values[1:] if len(r) >= 3 and r[0] and r[2]}
+
     def append_row(self, row: Sequence[str]) -> None:
         self._master.append_row(list(row), value_input_option="USER_ENTERED")
 

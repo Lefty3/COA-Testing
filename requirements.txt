@@ -3,4 +3,5 @@ anthropic>=0.40.0
 python-dotenv>=1.0.1
 gspread>=6.1.2
 google-auth>=2.34.0
+google-api-python-client>=2.140.0
 aiohttp>=3.9.0
