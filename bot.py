@@ -295,9 +295,10 @@ class TestResultsBot(discord.Client):
                 continue
 
             # Cross-check against the sheet (covers reinstalls where state.json was lost).
+            # Check both the CDN URL (old rows) and jump URL (new rows) to avoid duplicates.
             if existing_links is None:
                 existing_links = self.sheets.existing_links()
-            if att.url in existing_links:
+            if att.url in existing_links or message.jump_url in existing_links:
                 self.state.mark(att.id)
                 continue
 
@@ -312,7 +313,7 @@ class TestResultsBot(discord.Client):
                 result = TestResult(
                     fields=merged,
                     source_channel=channel_name,
-                    source_link=att.url,
+                    source_link=message.jump_url,  # permanent link, never expires
                     file_name=att.filename,
                 )
                 row = _build_row(result, message.jump_url)
