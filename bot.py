@@ -404,7 +404,6 @@ class TestResultsBot(discord.Client):
 
             # Upload to Drive if enabled; fall back to Discord jump URL on any failure.
             stored_link = message.jump_url
-            preview_formula = ""
             if self.drive is not None:
                 try:
                     drive_name = _drive_filename(channel_name, att.filename, merged)
@@ -416,8 +415,6 @@ class TestResultsBot(discord.Client):
                             file_name=drive_name,
                         )
                     stored_link = upload.web_view_link
-                    # IMAGE formula renders the PDF's first page in the cell.
-                    preview_formula = f'=IMAGE("{upload.thumbnail_url}")'
                 except Exception as e:
                     log.warning("Drive upload failed for %s — using jump URL: %s", att.filename, e)
 
@@ -427,7 +424,7 @@ class TestResultsBot(discord.Client):
                 source_link=stored_link,
                 file_name=att.filename,
             )
-            row = _build_row(result, message.jump_url, preview=preview_formula)
+            row = _build_row(result, message.jump_url)
             self.state.mark(att.id)
             log.info("Captured %s from #%s", att.filename, channel_name)
             return row
@@ -551,14 +548,13 @@ def _drive_filename(channel_name: str, file_name: str, fields: dict) -> str:
     return " — ".join(parts)[:200] + ".pdf"
 
 
-def _build_row(result: TestResult, jump_url: str, preview: str = "") -> list[str]:
+def _build_row(result: TestResult, jump_url: str) -> list[str]:
     captured_at = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     base = {
         "source_channel": result.source_channel,
         "source_link": result.source_link or jump_url,
         "file_name": result.file_name,
         "captured_at": captured_at,
-        "preview": preview,   # =IMAGE(...) formula or empty
     }
     base.update(result.fields)
     return [base.get(h, "") for h in MASTER_HEADERS]
