@@ -36,6 +36,7 @@ class Config:
     google_oauth_refresh_token: str
     sweep_day: int
     sweep_hour: int
+    sweep_concurrency: int   # max PDFs processed in parallel during a sweep
     state_path: str
 
     @classmethod
@@ -75,5 +76,6 @@ class Config:
             google_oauth_refresh_token=os.getenv("GOOGLE_OAUTH_REFRESH_TOKEN", ""),
             sweep_day=int(os.getenv("SWEEP_DAY", "0")),
             sweep_hour=int(os.getenv("SWEEP_HOUR", "13")),
+            sweep_concurrency=int(os.getenv("SWEEP_CONCURRENCY", "5")),
             state_path=os.getenv("STATE_PATH", "state.json"),
         )

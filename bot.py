@@ -280,87 +280,153 @@ class TestResultsBot(discord.Client):
         await self.wait_until_ready()
 
     # -- core pipeline --------------------------------------------------------------
+    #
+    # Two entry points:
+    #   run_sweep()         — batch backfill, processes PDFs concurrently and
+    #                         appends all rows to the sheet in a single API call
+    #   _process_message()  — live capture path (on_message); one message at a time
+    # Both funnel through _capture_attachment() which is the single source of truth.
 
     async def run_sweep(self) -> int:
-        """Walk every channel in the watched category and ingest any new PDFs."""
-        channels = self._category_channels()
-        log.info("Sweeping %d channel(s) in category", len(channels))
-        count = 0
+        """Walk every channel in the watched category and ingest any new PDFs.
+
+        Strategy:
+          1. Pre-fetch the (channel, filename) dedup set from the sheet ONCE.
+          2. Walk every channel concurrently to collect work items
+             (each work item = a PDF attachment we haven't seen before).
+          3. Process work items in parallel with a semaphore — the Claude API
+             call is the bottleneck (10-15s each), so this is a big speedup.
+          4. Batch-append all resulting rows to the sheet in one API call.
+        """
+        channels = [ch for ch in self._category_channels() if not self._is_ignored_channel(ch)]
+        log.info("Sweep: scanning %d channel(s) in category", len(channels))
+
+        existing_files = await asyncio.to_thread(self.sheets.existing_files)
+
+        # Phase 1 — collect work items by walking history in every channel.
+        work: list[tuple[discord.Message, discord.Attachment]] = []
         for ch in channels:
-            if self._is_ignored_channel(ch):
-                continue
             try:
                 async for msg in ch.history(limit=None, oldest_first=True):
                     if msg.author.bot or not msg.attachments:
                         continue
-                    captured = await self._process_message(msg)
-                    count += captured
+                    ch_name = getattr(msg.channel, "name", "")
+                    for att in msg.attachments:
+                        if not att.filename.lower().endswith(".pdf"):
+                            continue
+                        if self.state.seen(att.id):
+                            continue
+                        if (ch_name, att.filename) in existing_files:
+                            self.state.mark(att.id)
+                            continue
+                        work.append((msg, att))
             except discord.Forbidden:
                 log.warning("No read permission in #%s", ch.name)
+
+        log.info("Sweep: %d new PDF(s) to process", len(work))
+        if not work:
+            self.state.set_last_sweep(dt.datetime.now(dt.timezone.utc).isoformat())
+            return 0
+
+        # Phase 2 — process concurrently.
+        sem = asyncio.Semaphore(max(1, self.config.sweep_concurrency))
+        progress = {"done": 0, "total": len(work)}
+
+        async def _bound(msg, att):
+            async with sem:
+                row = await self._capture_attachment(msg, att)
+                progress["done"] += 1
+                if progress["done"] % 5 == 0 or progress["done"] == progress["total"]:
+                    log.info("Sweep progress: %d/%d", progress["done"], progress["total"])
+                return row
+
+        results = await asyncio.gather(
+            *[_bound(msg, att) for msg, att in work], return_exceptions=False
+        )
+        rows = [r for r in results if r is not None]
+
+        # Phase 3 — single batched write.
+        if rows:
+            await asyncio.to_thread(self.sheets.append_rows, rows)
+            log.info("Sweep: appended %d row(s) to sheet", len(rows))
+
         self.state.set_last_sweep(dt.datetime.now(dt.timezone.utc).isoformat())
-        return count
+        return len(rows)
 
     async def _process_message(self, message: discord.Message) -> int:
-        """Returns the number of NEW PDF attachments captured from this message."""
+        """Live capture path (called from on_message). Processes one message,
+        appends one row at a time. Cheap enough to do inline.
+        """
         captured = 0
-        channel = message.channel
-        channel_name = getattr(channel, "name", "")
-        hint = parse_channel_name(channel_name)
-        existing_files = None  # lazy-fetch once if needed
+        channel_name = getattr(message.channel, "name", "")
+        existing_files: Optional[set] = None  # lazy
 
         for att in message.attachments:
             if not att.filename.lower().endswith(".pdf"):
                 continue
             if self.state.seen(att.id):
                 continue
-
-            # Cross-check against the sheet (covers reinstalls where state.json was lost).
-            # Dedup by (channel, filename) so it works regardless of link format
-            # (CDN URL, jump URL, or Drive URL).
             if existing_files is None:
-                existing_files = self.sheets.existing_files()
+                existing_files = await asyncio.to_thread(self.sheets.existing_files)
             if (channel_name, att.filename) in existing_files:
                 self.state.mark(att.id)
                 continue
 
-            try:
-                pdf_bytes = await self.extractor.download(att.url)
-                extracted = await asyncio.to_thread(
-                    self.extractor.extract,
-                    pdf_bytes,
-                    hint=f"channel '{channel_name}', file '{att.filename}'",
-                )
-                merged = merge_with_channel(extracted, hint)
-
-                # Upload PDF to Drive if enabled; fall back to Discord jump URL.
-                # Drive link works for anyone (no Discord/Google login needed) and never expires.
-                stored_link = message.jump_url
-                if self.drive is not None:
-                    try:
-                        # Prefix the filename with channel + lot for easier browsing in Drive.
-                        drive_name = _drive_filename(channel_name, att.filename, merged)
-                        stored_link = await asyncio.to_thread(
-                            self.drive.upload_pdf,
-                            file_bytes=pdf_bytes,
-                            file_name=drive_name,
-                        )
-                    except Exception as e:
-                        log.warning("Drive upload failed for %s — using jump URL: %s", att.filename, e)
-
-                result = TestResult(
-                    fields=merged,
-                    source_channel=channel_name,
-                    source_link=stored_link,
-                    file_name=att.filename,
-                )
-                row = _build_row(result, message.jump_url)
+            row = await self._capture_attachment(message, att)
+            if row is not None:
                 await asyncio.to_thread(self.sheets.append_row, row)
-                self.state.mark(att.id)
                 captured += 1
-                log.info("Captured %s from #%s", att.filename, channel_name)
-            except Exception:
-                log.exception("Failed to process %s in #%s", att.filename, channel_name)
         return captured
+
+    async def _capture_attachment(
+        self, message: discord.Message, att: discord.Attachment
+    ) -> Optional[list[str]]:
+        """Download → Claude extract → Drive upload → build sheet row.
+
+        Returns the row to append, or None if processing failed.
+        Marks the attachment in state.json on success so future sweeps skip it.
+        """
+        channel_name = getattr(message.channel, "name", "")
+        hint = parse_channel_name(channel_name)
+        try:
+            pdf_bytes = await self.extractor.download(att.url)
+            extracted = await asyncio.to_thread(
+                self.extractor.extract,
+                pdf_bytes,
+                hint=f"channel '{channel_name}', file '{att.filename}'",
+            )
+            merged = merge_with_channel(extracted, hint)
+
+            # Upload to Drive if enabled; fall back to Discord jump URL on any failure.
+            stored_link = message.jump_url
+            preview_formula = ""
+            if self.drive is not None:
+                try:
+                    drive_name = _drive_filename(channel_name, att.filename, merged)
+                    upload = await asyncio.to_thread(
+                        self.drive.upload_pdf,
+                        file_bytes=pdf_bytes,
+                        file_name=drive_name,
+                    )
+                    stored_link = upload.web_view_link
+                    # IMAGE formula renders the PDF's first page in the cell.
+                    preview_formula = f'=IMAGE("{upload.thumbnail_url}")'
+                except Exception as e:
+                    log.warning("Drive upload failed for %s — using jump URL: %s", att.filename, e)
+
+            result = TestResult(
+                fields=merged,
+                source_channel=channel_name,
+                source_link=stored_link,
+                file_name=att.filename,
+            )
+            row = _build_row(result, message.jump_url, preview=preview_formula)
+            self.state.mark(att.id)
+            log.info("Captured %s from #%s", att.filename, channel_name)
+            return row
+        except Exception:
+            log.exception("Failed to process %s in #%s", att.filename, channel_name)
+            return None
 
     # -- helpers --------------------------------------------------------------------
 
@@ -478,13 +544,14 @@ def _drive_filename(channel_name: str, file_name: str, fields: dict) -> str:
     return " — ".join(parts)[:200] + ".pdf"
 
 
-def _build_row(result: TestResult, jump_url: str) -> list[str]:
+def _build_row(result: TestResult, jump_url: str, preview: str = "") -> list[str]:
     captured_at = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     base = {
         "source_channel": result.source_channel,
         "source_link": result.source_link or jump_url,
         "file_name": result.file_name,
         "captured_at": captured_at,
+        "preview": preview,   # =IMAGE(...) formula or empty
     }
     base.update(result.fields)
     return [base.get(h, "") for h in MASTER_HEADERS]

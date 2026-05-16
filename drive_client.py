@@ -18,6 +18,7 @@ import base64
 import io
 import json
 import logging
+from dataclasses import dataclass
 from typing import Optional
 
 from google.oauth2.credentials import Credentials as OAuthCredentials
@@ -31,6 +32,14 @@ log = logging.getLogger(__name__)
 # privilege is preserved per client.
 _SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 _TOKEN_URI = "https://oauth2.googleapis.com/token"
+
+
+@dataclass(frozen=True)
+class DriveUpload:
+    """Result of a successful Drive upload."""
+    file_id: str
+    web_view_link: str    # human-friendly preview page (drive.google.com/file/d/.../view)
+    thumbnail_url: str    # public thumbnail (works in =IMAGE() once anyone-with-link is set)
 
 
 class DriveClient:
@@ -97,11 +106,12 @@ class DriveClient:
 
     # ----------------------------------------------------------------------------------
 
-    def upload_pdf(self, *, file_bytes: bytes, file_name: str) -> str:
-        """Upload PDF bytes to the configured Drive folder and return a shareable link.
+    def upload_pdf(self, *, file_bytes: bytes, file_name: str) -> DriveUpload:
+        """Upload PDF bytes to the configured Drive folder and return links.
 
         - Sets file permission to anyone-with-link 'reader' so the URL works without login.
-        - Returns the file's webViewLink (drive.google.com preview page).
+        - Returns a DriveUpload with the file id, viewer URL, and thumbnail URL
+          (the thumbnail URL is suitable for =IMAGE() in Google Sheets).
 
         Raises on failure — caller decides whether to fall back.
         """
@@ -125,7 +135,7 @@ class DriveClient:
             .execute()
         )
         file_id = created["id"]
-        link = created.get("webViewLink")
+        view_link = created.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}/view"
 
         # Make it viewable by anyone with the link — no login required.
         try:
@@ -137,7 +147,12 @@ class DriveClient:
         except Exception as e:
             log.warning("Could not set anyone-with-link permission on %s: %s", file_name, e)
 
-        if not link:
-            link = f"https://drive.google.com/file/d/{file_id}/view"
+        # The /thumbnail endpoint works for anyone-with-link readable files and
+        # renders an image even from a PDF (first-page preview, ~640px).
+        thumbnail_url = f"https://drive.google.com/thumbnail?id={file_id}&sz=w640"
 
-        return link
+        return DriveUpload(
+            file_id=file_id,
+            web_view_link=view_link,
+            thumbnail_url=thumbnail_url,
+        )

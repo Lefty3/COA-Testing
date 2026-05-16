@@ -15,13 +15,19 @@ from pdf_extractor import TEST_RESULT_FIELDS
 log = logging.getLogger(__name__)
 
 
-# Order matters — columns A..R below correspond to these headers in this exact order.
-MASTER_HEADERS = [
-    "source_channel",   # A
-    "source_link",      # B
-    "file_name",        # C
-    "captured_at",      # D  (ISO timestamp when the bot processed it)
-] + TEST_RESULT_FIELDS  # E..R
+# Order matters — columns A..S below correspond to these headers in this exact order.
+# IMPORTANT: dashboard formulas reference letter positions of E (compound),
+# I (test_date), J (lab), L (purity_pct), Q (result). Don't reorder those columns.
+MASTER_HEADERS = (
+    [
+        "source_channel",   # A
+        "source_link",      # B
+        "file_name",        # C
+        "captured_at",      # D  (ISO timestamp when the bot processed it)
+    ]
+    + TEST_RESULT_FIELDS   # E..R
+    + ["preview"]          # S  — =IMAGE(...) formula showing the PDF thumbnail
+)
 
 
 _SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -66,11 +72,13 @@ class SheetsClient:
             ws = self._sh.worksheet(self._master_name)
         except gspread.WorksheetNotFound:
             ws = self._sh.add_worksheet(title=self._master_name, rows=2000, cols=len(MASTER_HEADERS))
-        # Make sure header row matches.
+        # Make sure header row matches. We update if anything differs (handles
+        # schema migrations like adding the 'preview' column).
         existing = ws.row_values(1)
         if existing != MASTER_HEADERS:
             ws.update("A1", [MASTER_HEADERS])
-            ws.format("A1:R1", {"textFormat": {"bold": True}})
+            # Bold the header row; A:S covers up to the preview column.
+            ws.format("A1:S1", {"textFormat": {"bold": True}})
         return ws
 
     def _ensure_dashboard_tab(self) -> gspread.Worksheet:
@@ -150,6 +158,14 @@ class SheetsClient:
 
     def append_row(self, row: Sequence[str]) -> None:
         self._master.append_row(list(row), value_input_option="USER_ENTERED")
+
+    def append_rows(self, rows: Sequence[Sequence[str]]) -> None:
+        """Batch-append multiple rows in a single API call (much faster for sweeps)."""
+        if not rows:
+            return
+        self._master.append_rows(
+            [list(r) for r in rows], value_input_option="USER_ENTERED"
+        )
 
     # -- queries --------------------------------------------------------------------
 
