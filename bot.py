@@ -111,6 +111,11 @@ class TestResultsBot(discord.Client):
                 self.drive = None
         else:
             log.info("Drive uploads disabled (no GOOGLE_DRIVE_FOLDER_ID set) — using Discord jump URLs")
+        # googleapiclient's Drive service isn't thread-safe — serialize uploads
+        # with a lock so the ~1-2s upload calls don't crash the interpreter
+        # when multiple sweep workers fire concurrently. Claude extraction
+        # (the actual bottleneck) stays fully parallel.
+        self._drive_lock = asyncio.Lock()
         self.state = State(Path(config.state_path))
         self._register_commands()
 
@@ -403,11 +408,13 @@ class TestResultsBot(discord.Client):
             if self.drive is not None:
                 try:
                     drive_name = _drive_filename(channel_name, att.filename, merged)
-                    upload = await asyncio.to_thread(
-                        self.drive.upload_pdf,
-                        file_bytes=pdf_bytes,
-                        file_name=drive_name,
-                    )
+                    # Serialize Drive uploads — googleapiclient is NOT thread-safe.
+                    async with self._drive_lock:
+                        upload = await asyncio.to_thread(
+                            self.drive.upload_pdf,
+                            file_bytes=pdf_bytes,
+                            file_name=drive_name,
+                        )
                     stored_link = upload.web_view_link
                     # IMAGE formula renders the PDF's first page in the cell.
                     preview_formula = f'=IMAGE("{upload.thumbnail_url}")'
