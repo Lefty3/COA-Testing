@@ -30,6 +30,10 @@ class Config:
     master_tab: str
     dashboard_tab: str
     google_drive_folder_id: str   # if set, PDFs are uploaded to this Drive folder & link stored in sheet
+    # Optional OAuth user-delegation (preferred for personal Google accounts).
+    google_oauth_client_id: str
+    google_oauth_client_secret: str
+    google_oauth_refresh_token: str
     sweep_day: int
     sweep_hour: int
     state_path: str
@@ -66,6 +70,9 @@ class Config:
             master_tab=os.getenv("MASTER_TAB", "All Tests"),
             dashboard_tab=os.getenv("DASHBOARD_TAB", "Dashboard"),
             google_drive_folder_id=os.getenv("GOOGLE_DRIVE_FOLDER_ID", ""),
+            google_oauth_client_id=os.getenv("GOOGLE_OAUTH_CLIENT_ID", ""),
+            google_oauth_client_secret=os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", ""),
+            google_oauth_refresh_token=os.getenv("GOOGLE_OAUTH_REFRESH_TOKEN", ""),
             sweep_day=int(os.getenv("SWEEP_DAY", "0")),
             sweep_hour=int(os.getenv("SWEEP_HOUR", "13")),
             state_path=os.getenv("STATE_PATH", "state.json"),

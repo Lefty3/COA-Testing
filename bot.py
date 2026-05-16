@@ -98,6 +98,9 @@ class TestResultsBot(discord.Client):
             try:
                 self.drive = DriveClient(
                     folder_id=config.google_drive_folder_id,
+                    oauth_client_id=config.google_oauth_client_id or None,
+                    oauth_client_secret=config.google_oauth_client_secret or None,
+                    oauth_refresh_token=config.google_oauth_refresh_token or None,
                     service_account_file=config.google_service_account_file or None,
                     service_account_json=config.google_service_account_json or None,
                     service_account_json_b64=config.google_service_account_json_b64 or None,
